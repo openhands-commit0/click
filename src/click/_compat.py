@@ -35,6 +35,60 @@ def _get_argv_encoding() -> str:
     """Get the encoding for argv on the current platform."""
     return getattr(sys.stdin, 'encoding', None) or sys.getfilesystemencoding() or 'utf-8'
 
+def _find_binary_reader(stream: t.IO[t.Any]) -> t.BinaryIO:
+    """Find a binary reader for the given stream."""
+    if isinstance(stream, (io.RawIOBase, io.BufferedIOBase)):
+        return t.cast(t.BinaryIO, stream)
+    buffer = getattr(stream, 'buffer', None)
+    if buffer is not None:
+        return t.cast(t.BinaryIO, buffer)
+    return t.cast(t.BinaryIO, stream)
+
+def _find_binary_writer(stream: t.IO[t.Any]) -> t.BinaryIO:
+    """Find a binary writer for the given stream."""
+    if isinstance(stream, (io.RawIOBase, io.BufferedIOBase)):
+        return t.cast(t.BinaryIO, stream)
+    buffer = getattr(stream, 'buffer', None)
+    if buffer is not None:
+        return t.cast(t.BinaryIO, buffer)
+    return t.cast(t.BinaryIO, stream)
+
+def open_stream(filename: t.Union[str, 'os.PathLike[str]', int], mode: str='r', encoding: t.Optional[str]=None, errors: t.Optional[str]='strict', atomic: bool=False) -> t.Tuple[t.IO[t.Any], bool]:
+    """Open a file or stream."""
+    if isinstance(filename, int):
+        if 'w' in mode:
+            return _find_binary_writer(sys.stdout), False
+        return _find_binary_reader(sys.stdin), False
+
+    if 'b' in mode:
+        return _wrap_io_open(filename, mode, None, None), True
+
+    encoding = encoding or _get_argv_encoding()
+    return _wrap_io_open(filename, mode, encoding, errors), True
+
+def should_strip_ansi(stream: t.Optional[t.IO[t.Any]]=None, color: t.Optional[bool]=None) -> bool:
+    """Determine if ANSI escape sequences should be stripped from the output."""
+    if color is None:
+        return not isatty(stream)
+    return not color
+
+def strip_ansi(value: str) -> str:
+    """Strip ANSI escape sequences from a string."""
+    return _ansi_re.sub('', value)
+
+def isatty(stream: t.Optional[t.IO[t.Any]]) -> bool:
+    """Check if a stream is a TTY."""
+    if stream is None:
+        stream = sys.stdout
+    try:
+        return stream.isatty()
+    except Exception:
+        return False
+
+def term_len(x: str) -> int:
+    """Return the length of a string, taking into account ANSI escape sequences."""
+    return len(strip_ansi(x))
+
 def is_ascii_encoding(encoding: str) -> bool:
     """Checks if a given encoding is ascii."""
     try:
