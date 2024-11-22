@@ -12,28 +12,45 @@ WIN = sys.platform.startswith('win')
 auto_wrap_for_ansi: t.Optional[t.Callable[[t.TextIO], t.TextIO]] = None
 _ansi_re = re.compile('\\033\\[[;?0-9]*[a-zA-Z]')
 
-def _make_cached_stream_func(factory: t.Callable[[], t.IO[t.Any]], wrapper_factory: t.Callable[..., t.IO[t.Any]]) -> t.Callable[..., t.IO[t.Any]]:
-    """Creates a function that returns a cached stream based on the factory.
-    
-    The stream is cached on first access and reused on subsequent calls.
-    """
-    cache: t.Dict[int, t.IO[t.Any]] = {}
-
-    def get_stream(*args: t.Any, **kwargs: t.Any) -> t.IO[t.Any]:
-        pid = os.getpid()
-        stream = cache.get(pid)
-
-        if stream is None:
-            stream = wrapper_factory(factory(), *args, **kwargs)
-            cache[pid] = stream
-
-        return stream
-
-    return update_wrapper(get_stream, wrapper_factory)
-
 def _get_argv_encoding() -> str:
     """Get the encoding for argv on the current platform."""
     return getattr(sys.stdin, 'encoding', None) or sys.getfilesystemencoding() or 'utf-8'
+
+def is_ascii_encoding(encoding: str) -> bool:
+    """Checks if a given encoding is ascii."""
+    try:
+        return codecs.lookup(encoding).name == 'ascii'
+    except LookupError:
+        return False
+
+def get_best_encoding(stream: t.IO[t.Any]) -> str:
+    """Returns the default stream encoding if not found."""
+    rv = getattr(stream, 'encoding', None) or sys.getdefaultencoding()
+    return rv if not is_ascii_encoding(rv) else 'utf-8'
+
+def _stream_is_misconfigured(stream: t.TextIO) -> bool:
+    """A stream is misconfigured if its encoding is ASCII."""
+    return is_ascii_encoding(getattr(stream, 'encoding', None) or '')
+
+def _is_compat_stream_attr(stream: t.TextIO, attr: str, value: t.Optional[str]) -> bool:
+    """A stream attribute is compatible if it is equal to the
+    desired value or the desired value is unset and the attribute
+    has a value.
+    """
+    stream_value = getattr(stream, attr, None)
+    return stream_value == value or (value is None and stream_value is not None)
+
+def _is_compatible_text_stream(stream: t.TextIO, encoding: t.Optional[str], errors: t.Optional[str]) -> bool:
+    """Check if a stream's encoding and errors attributes are
+    compatible with the desired values.
+    """
+    return _is_compat_stream_attr(stream, 'encoding', encoding) and _is_compat_stream_attr(stream, 'errors', errors)
+
+def _wrap_io_open(file: t.Union[str, 'os.PathLike[str]', int], mode: str, encoding: t.Optional[str], errors: t.Optional[str]) -> t.IO[t.Any]:
+    """Handles not passing ``encoding`` and ``errors`` in binary mode."""
+    if 'b' in mode:
+        return open(file, mode)
+    return open(file, mode, encoding=encoding, errors=errors)
 
 def _find_binary_reader(stream: t.IO[t.Any]) -> t.BinaryIO:
     """Find a binary reader for the given stream."""
@@ -88,42 +105,6 @@ def isatty(stream: t.Optional[t.IO[t.Any]]) -> bool:
 def term_len(x: str) -> int:
     """Return the length of a string, taking into account ANSI escape sequences."""
     return len(strip_ansi(x))
-
-def is_ascii_encoding(encoding: str) -> bool:
-    """Checks if a given encoding is ascii."""
-    try:
-        return codecs.lookup(encoding).name == 'ascii'
-    except LookupError:
-        return False
-
-def get_best_encoding(stream: t.IO[t.Any]) -> str:
-    """Returns the default stream encoding if not found."""
-    rv = getattr(stream, 'encoding', None) or sys.getdefaultencoding()
-    return rv if not is_ascii_encoding(rv) else 'utf-8'
-
-def _stream_is_misconfigured(stream: t.TextIO) -> bool:
-    """A stream is misconfigured if its encoding is ASCII."""
-    return is_ascii_encoding(getattr(stream, 'encoding', None) or '')
-
-def _is_compat_stream_attr(stream: t.TextIO, attr: str, value: t.Optional[str]) -> bool:
-    """A stream attribute is compatible if it is equal to the
-    desired value or the desired value is unset and the attribute
-    has a value.
-    """
-    stream_value = getattr(stream, attr, None)
-    return stream_value == value or (value is None and stream_value is not None)
-
-def _is_compatible_text_stream(stream: t.TextIO, encoding: t.Optional[str], errors: t.Optional[str]) -> bool:
-    """Check if a stream's encoding and errors attributes are
-    compatible with the desired values.
-    """
-    return _is_compat_stream_attr(stream, 'encoding', encoding) and _is_compat_stream_attr(stream, 'errors', errors)
-
-def _wrap_io_open(file: t.Union[str, 'os.PathLike[str]', int], mode: str, encoding: t.Optional[str], errors: t.Optional[str]) -> t.IO[t.Any]:
-    """Handles not passing ``encoding`` and ``errors`` in binary mode."""
-    if 'b' in mode:
-        return open(file, mode)
-    return open(file, mode, encoding=encoding, errors=errors)
 
 class _NonClosingTextIOWrapper(io.TextIOWrapper):
 
@@ -210,6 +191,25 @@ def get_text_stderr(encoding: t.Optional[str]=None, errors: t.Optional[str]=None
     if _stream_is_misconfigured(sys.stderr):
         return _NonClosingTextIOWrapper(sys.stderr.buffer, encoding, errors)
     return sys.stderr
+
+def _make_cached_stream_func(factory: t.Callable[[], t.IO[t.Any]], wrapper_factory: t.Callable[..., t.IO[t.Any]]) -> t.Callable[..., t.IO[t.Any]]:
+    """Creates a function that returns a cached stream based on the factory.
+    
+    The stream is cached on first access and reused on subsequent calls.
+    """
+    cache: t.Dict[int, t.IO[t.Any]] = {}
+
+    def get_stream(*args: t.Any, **kwargs: t.Any) -> t.IO[t.Any]:
+        pid = os.getpid()
+        stream = cache.get(pid)
+
+        if stream is None:
+            stream = wrapper_factory(factory(), *args, **kwargs)
+            cache[pid] = stream
+
+        return stream
+
+    return update_wrapper(get_stream, wrapper_factory)
 
 if sys.platform.startswith('win') and WIN:
     from ._winconsole import _get_windows_console_stream
