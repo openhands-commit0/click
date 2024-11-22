@@ -12,6 +12,25 @@ WIN = sys.platform.startswith('win')
 auto_wrap_for_ansi: t.Optional[t.Callable[[t.TextIO], t.TextIO]] = None
 _ansi_re = re.compile('\\033\\[[;?0-9]*[a-zA-Z]')
 
+def _make_cached_stream_func(factory: t.Callable[[], t.IO[t.Any]], wrapper_factory: t.Callable[..., t.IO[t.Any]]) -> t.Callable[..., t.IO[t.Any]]:
+    """Creates a function that returns a cached stream based on the factory.
+    
+    The stream is cached on first access and reused on subsequent calls.
+    """
+    cache: t.Dict[int, t.IO[t.Any]] = {}
+
+    def get_stream(*args: t.Any, **kwargs: t.Any) -> t.IO[t.Any]:
+        pid = os.getpid()
+        stream = cache.get(pid)
+
+        if stream is None:
+            stream = wrapper_factory(factory(), *args, **kwargs)
+            cache[pid] = stream
+
+        return stream
+
+    return update_wrapper(get_stream, wrapper_factory)
+
 def _get_argv_encoding() -> str:
     """Get the encoding for argv on the current platform."""
     return getattr(sys.stdin, 'encoding', None) or sys.getfilesystemencoding() or 'utf-8'
@@ -137,25 +156,6 @@ def get_text_stderr(encoding: t.Optional[str]=None, errors: t.Optional[str]=None
     if _stream_is_misconfigured(sys.stderr):
         return _NonClosingTextIOWrapper(sys.stderr.buffer, encoding, errors)
     return sys.stderr
-
-def _make_cached_stream_func(factory: t.Callable[[], t.IO[t.Any]], wrapper_factory: t.Callable[..., t.IO[t.Any]]) -> t.Callable[..., t.IO[t.Any]]:
-    """Creates a function that returns a cached stream based on the factory.
-    
-    The stream is cached on first access and reused on subsequent calls.
-    """
-    cache: t.Dict[int, t.IO[t.Any]] = {}
-
-    def get_stream(*args: t.Any, **kwargs: t.Any) -> t.IO[t.Any]:
-        pid = os.getpid()
-        stream = cache.get(pid)
-
-        if stream is None:
-            stream = wrapper_factory(factory(), *args, **kwargs)
-            cache[pid] = stream
-
-        return stream
-
-    return update_wrapper(get_stream, wrapper_factory)
 
 if sys.platform.startswith('win') and WIN:
     from ._winconsole import _get_windows_console_stream
