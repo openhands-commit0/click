@@ -7,6 +7,10 @@ import typing as t
 from functools import update_wrapper
 from weakref import WeakKeyDictionary
 
+def _get_argv_encoding() -> str:
+    """Get the encoding for argv on the current platform."""
+    return getattr(sys.stdin, 'encoding', None) or sys.getfilesystemencoding() or 'utf-8'
+
 def _make_cached_stream_func(factory: t.Callable[[], t.IO[t.Any]], wrapper_factory: t.Callable[..., t.IO[t.Any]]) -> t.Callable[..., t.IO[t.Any]]:
     """Creates a function that returns a cached stream based on the factory.
     
@@ -115,26 +119,6 @@ class _AtomicFile:
 
     def __repr__(self) -> str:
         return repr(self._f)
-if sys.platform.startswith('win') and WIN:
-    from ._winconsole import _get_windows_console_stream
-    _ansi_stream_wrappers: t.MutableMapping[t.TextIO, t.TextIO] = WeakKeyDictionary()
-
-    def auto_wrap_for_ansi(stream: t.TextIO, color: t.Optional[bool]=None) -> t.TextIO:
-        """Support ANSI color and style codes on Windows by wrapping a
-        stream with colorama.
-        """
-        try:
-            cached = _ansi_stream_wrappers.get(stream)
-            if cached is not None:
-                return cached
-            
-            import colorama
-            strip = not color if color is not None else not colorama.enable
-            wrapped = colorama.AnsiToWin32(stream, strip=strip).stream
-            _ansi_stream_wrappers[stream] = wrapped
-            return wrapped
-        except ImportError:
-            return stream
 def get_binary_stdin() -> t.BinaryIO:
     return sys.stdin.buffer
 
@@ -170,6 +154,27 @@ def get_text_stderr(encoding: t.Optional[str]=None, errors: t.Optional[str]=None
     if _stream_is_misconfigured(sys.stderr):
         return _NonClosingTextIOWrapper(sys.stderr.buffer, encoding, errors)
     return sys.stderr
+
+if sys.platform.startswith('win') and WIN:
+    from ._winconsole import _get_windows_console_stream
+    _ansi_stream_wrappers: t.MutableMapping[t.TextIO, t.TextIO] = WeakKeyDictionary()
+
+    def auto_wrap_for_ansi(stream: t.TextIO, color: t.Optional[bool]=None) -> t.TextIO:
+        """Support ANSI color and style codes on Windows by wrapping a
+        stream with colorama.
+        """
+        try:
+            cached = _ansi_stream_wrappers.get(stream)
+            if cached is not None:
+                return cached
+            
+            import colorama
+            strip = not color if color is not None else not colorama.enable
+            wrapped = colorama.AnsiToWin32(stream, strip=strip).stream
+            _ansi_stream_wrappers[stream] = wrapped
+            return wrapped
+        except ImportError:
+            return stream
 
 _default_text_stdin = _make_cached_stream_func(lambda: sys.stdin, get_text_stdin)
 _default_text_stdout = _make_cached_stream_func(lambda: sys.stdout, get_text_stdout)
