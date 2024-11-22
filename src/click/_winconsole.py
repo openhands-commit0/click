@@ -16,7 +16,7 @@ from ctypes.wintypes import DWORD
 from ctypes.wintypes import HANDLE
 from ctypes.wintypes import LPCWSTR
 from ctypes.wintypes import LPWSTR
-from ._compat import _NonClosingTextIOWrapper
+from ._wrappers import _NonClosingTextIOWrapper
 assert sys.platform == 'win32'
 import msvcrt
 from ctypes import windll
